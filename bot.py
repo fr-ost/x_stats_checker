@@ -18,34 +18,34 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS stats_history
-                 (username TEXT, timestamp DATETIME, following INTEGER, followers INTEGER, verified INTEGER)''')
+                 (username TEXT, timestamp DATETIME, following INTEGER, followers INTEGER, posts INTEGER)''')
     conn.commit()
     conn.close()
 
-def save_snapshot(username, following, followers, verified):
+def save_snapshot(username, following, followers, posts):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("INSERT INTO stats_history (username, timestamp, following, followers, verified) VALUES (?, ?, ?, ?, ?)",
-              (username, datetime.now(), int(following), int(followers), int(verified)))
+    c.execute("INSERT INTO stats_history (username, timestamp, following, followers, posts) VALUES (?, ?, ?, ?, ?)",
+              (username, datetime.now(), int(following), int(followers), int(posts)))
     conn.commit()
     conn.close()
 
 def get_last_snapshot(username):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT following, followers, verified FROM stats_history WHERE username=? ORDER BY timestamp DESC LIMIT 1 OFFSET 1", (username,))
+    c.execute("SELECT following, followers, posts FROM stats_history WHERE username=? ORDER BY timestamp DESC LIMIT 1 OFFSET 1", (username,))
     row = c.fetchone()
     conn.close()
     return row
 
 # --- UTILS ---
 def escape_md(text):
-    """Aggressive escape for MarkdownV2 to prevent any parsing errors."""
+    """Deep escape for MarkdownV2."""
     return re.sub(r'([_*\[\]()~`>#+\-=|{}.!])', r'\\\1', str(text))
 
 def get_menu_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔍 Analyse Profile", callback_data='analyse')],
+        [InlineKeyboardButton("📊 Analyse Profile", callback_data='analyse')],
         [InlineKeyboardButton("⚙️ Set Target User", callback_data='how_to_change')]
     ])
 
@@ -90,29 +90,25 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if query.data == 'analyse':
-        await query.edit_message_text(f"📡 *Fetching data for @{user_esc}\.\.\.*", parse_mode='MarkdownV2')
+        await query.edit_message_text(f"📡 *Analysing @{user_esc}\.\.\.*", parse_mode='MarkdownV2')
         
         try:
             res = requests.get(f"https://api.socialdata.tools/twitter/user/{user_raw}", 
                                headers={"Authorization": f"Bearer {SOCIALDATA_API}"})
             data = res.json()
             
-            # Extract numbers with safety
+            # Extract numbers
+            # Note: 'statuses_count' is the standard X API field for total posts
             f_cur = data.get('friends_count') or data.get('public_metrics', {}).get('following_count', 0)
             fl_cur = data.get('followers_count') or data.get('public_metrics', {}).get('followers_count', 0)
-            v_cur = (
-                data.get('verified_followers_count') or 
-                data.get('blue_verified_followers_count') or 
-                data.get('public_metrics', {}).get('verified_followers_count', 0) or
-                data.get('ext_is_blue_verified_count', 0)
-            )
+            p_cur = data.get('statuses_count') or data.get('public_metrics', {}).get('tweet_count', 0)
 
             # Ensure they are integers
             f_cur = int(f_cur) if not isinstance(f_cur, bool) else 0
             fl_cur = int(fl_cur) if not isinstance(fl_cur, bool) else 0
-            v_cur = int(v_cur) if not isinstance(v_cur, bool) else 0
+            p_cur = int(p_cur) if not isinstance(p_cur, bool) else 0
 
-            save_snapshot(user_raw, f_cur, fl_cur, v_cur)
+            save_snapshot(user_raw, f_cur, fl_cur, p_cur)
             prev = get_last_snapshot(user_raw)
             
             def diff_fmt(cur, old):
@@ -130,8 +126,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"{sep}\n"
                 f"📈 *Following:* `{f_cur}`{diff_fmt(f_cur, prev[0]) if prev else ''}\n"
                 f"👥 *Followers:* `{fl_cur}`{diff_fmt(fl_cur, prev[1]) if prev else ''}\n"
-                f"💎 *Verified:* `{v_cur}`{diff_fmt(v_cur, prev[2]) if prev else ''}\n"
-                f"{sep}"
+                f"📝 *Total Posts:* `{p_cur}`{diff_fmt(p_cur, prev[2]) if prev else ''}\n"
+                f"{sep}\n"
+                f"ℹ️ _Tracking changes in posts and audience\._"
             )
             
             await query.edit_message_text(text=report, reply_markup=get_menu_keyboard(), parse_mode='MarkdownV2')
@@ -141,11 +138,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 if __name__ == '__main__':
     init_db()
-    if not TG_TOKEN or not SOCIALDATA_API:
-        print("Variables missing!")
-    else:
-        app = ApplicationBuilder().token(TG_TOKEN).build()
-        app.add_handler(CommandHandler("start", start))
-        app.add_handler(CommandHandler("setuser", set_user_command))
-        app.add_handler(CallbackQueryHandler(handle_callback))
-        app.run_polling()
+    app = ApplicationBuilder().token(TG_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("setuser", set_user_command))
+    app.add_handler(CallbackQueryHandler(handle_callback))
+    app.run_polling()
