@@ -1,71 +1,90 @@
 import os
 import requests
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # --- CONFIGURATION ---
-# These will be pulled from your Railway "Variables" tab
 TG_TOKEN = os.getenv('TG_TOKEN')
 SOCIALDATA_API = os.getenv('SOCIALDATA_API')
+# Change this to your actual username once, or set it in Railway Variables
+X_USERNAME = os.getenv('X_USERNAME', '0x_nation') 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Create the Dashboard Buttons
+    keyboard = [
+        [InlineKeyboardButton("📈 Following", callback_data='friends_count')],
+        [InlineKeyboardButton("👥 Total Followers", callback_data='followers_count')],
+        [InlineKeyboardButton("💎 Verified Followers", callback_data='verified_followers_count')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
     await update.message.reply_text(
-        "👋 Welcome! Send me any X (Twitter) username, and I'll tell you how many people they are following.\n\n"
-        "Example: `elonmusk`"
+        f"📊 **@{X_USERNAME} Stats Dashboard**\nSelect a metric to check:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
     )
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Get the username from the user's message and clean it
-    user_input = update.message.text.strip().replace('@', '')
+async def handle_metrics(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    metric_type = query.data # This gets 'friends_count', etc.
+    await query.answer()
     
-    # Basic validation
-    if not user_input:
-        await update.message.reply_text("Please enter a valid username.")
-        return
+    await query.edit_message_text(f"🔍 Fetching {metric_type.replace('_', ' ')}...")
 
-    msg = await update.message.reply_text(f"🔍 Fetching following count for @{user_input}...")
-
-    # SocialData API setup
-    url = f"https://api.socialdata.tools/twitter/user/{user_input}"
-    headers = {
-        "Authorization": f"Bearer {SOCIALDATA_API}",
-        "Accept": "application/json"
-    }
+    url = f"https://api.socialdata.tools/twitter/user/{X_USERNAME}"
+    headers = {"Authorization": f"Bearer {SOCIALDATA_API}", "Accept": "application/json"}
 
     try:
         response = requests.get(url, headers=headers)
+        data = response.json()
         
-        if response.status_code == 200:
-            data = response.json()
-            following = data.get('friends_count')
-            
-            if following is not None:
-                await msg.edit_text(f"👤 **@{user_input}**\n✅ Following: **{following}**")
-            else:
-                await msg.edit_text(f"❌ Could not find following count for @{user_input}.")
+        # Mapping for better display names
+        names = {
+            'friends_count': 'Following',
+            'followers_count': 'Total Followers',
+            'verified_followers_count': 'Verified Followers'
+        }
         
-        elif response.status_code == 404:
-            await msg.edit_text(f"❌ Error: The user '@{user_input}' does not exist.")
-        elif response.status_code == 429:
-            await msg.edit_text("❌ Error: Out of API credits.")
-        else:
-            await msg.edit_text(f"❌ API Error: {response.status_code}")
+        value = data.get(metric_type, "N/A")
+        
+        # Create a "Back" button to return to the menu
+        back_keyboard = [[InlineKeyboardButton("⬅️ Back to Menu", callback_data='menu')]]
+        back_markup = InlineKeyboardMarkup(back_keyboard)
 
+        await query.edit_message_text(
+            text=f"👤 **@{X_USERNAME}**\n📊 **{names[metric_type]}:** `{value}`",
+            reply_markup=back_markup,
+            parse_mode='Markdown'
+        )
     except Exception as e:
-        await msg.edit_text(f"❌ System Error: {str(e)}")
+        await query.edit_message_text(f"❌ Error: {str(e)}")
+
+async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # This just resets the message to the original start menu
+    query = update.callback_query
+    await query.answer()
+    
+    keyboard = [
+        [InlineKeyboardButton("📈 Following", callback_data='friends_count')],
+        [InlineKeyboardButton("👥 Total Followers", callback_data='followers_count')],
+        [InlineKeyboardButton("💎 Verified Followers", callback_data='verified_followers_count')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        f"📊 **@{X_USERNAME} Stats Dashboard**\nSelect a metric to check:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
 
 if __name__ == '__main__':
-    if not TG_TOKEN or not SOCIALDATA_API:
-        print("CRITICAL ERROR: Missing TG_TOKEN or SOCIALDATA_API in Variables!")
-    else:
-        app = ApplicationBuilder().token(TG_TOKEN).build()
-        
-        # Handle the /start command
-        app.add_handler(CommandHandler("start", start))
-        
-        # Handle all text messages (this is where the username goes)
-        # We exclude commands so it doesn't try to scrape "/start"
-        app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-        
-        print("Bot is live on Railway...")
-        app.run_polling()
+    app = ApplicationBuilder().token(TG_TOKEN).build()
+    
+    app.add_handler(CommandHandler("start", start))
+    # This handles the metric buttons
+    app.add_handler(CallbackQueryHandler(handle_metrics, pattern='^(friends_count|followers_count|verified_followers_count)$'))
+    # This handles the "Back" button
+    app.add_handler(CallbackQueryHandler(back_to_menu, pattern='^menu$'))
+    
+    print("Dashboard Bot is live...")
+    app.run_polling()
