@@ -17,14 +17,26 @@ def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+    # Create the table if it doesn't exist
     c.execute('''CREATE TABLE IF NOT EXISTS stats_history
                  (username TEXT, timestamp DATETIME, following INTEGER, followers INTEGER, posts INTEGER)''')
+    
+    # SAFETY CHECK: If you are upgrading from the 'verified' version, add the 'posts' column
+    c.execute("PRAGMA table_info(stats_history)")
+    columns = [column[1] for column in c.fetchall()]
+    if 'posts' not in columns:
+        try:
+            c.execute("ALTER TABLE stats_history ADD COLUMN posts INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass # Column already exists or table is empty
+            
     conn.commit()
     conn.close()
 
 def save_snapshot(username, following, followers, posts):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+    # Explicitly naming columns to avoid conflicts with old 'verified' data
     c.execute("INSERT INTO stats_history (username, timestamp, following, followers, posts) VALUES (?, ?, ?, ?, ?)",
               (username, datetime.now(), int(following), int(followers), int(posts)))
     conn.commit()
@@ -33,6 +45,7 @@ def save_snapshot(username, following, followers, posts):
 def get_last_snapshot(username):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+    # Fetch the last 3 columns (following, followers, posts)
     c.execute("SELECT following, followers, posts FROM stats_history WHERE username=? ORDER BY timestamp DESC LIMIT 1 OFFSET 1", (username,))
     row = c.fetchone()
     conn.close()
