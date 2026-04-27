@@ -10,13 +10,10 @@ from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandle
 TG_TOKEN = os.getenv('TG_TOKEN')
 SOCIALDATA_API = os.getenv('SOCIALDATA_API')
 current_data = {"username": "0x_nation"}
-
-# Path for Railway Volume persistence
 DB_PATH = '/app/data/bot_database.db'
 
 # --- DATABASE LOGIC ---
 def init_db():
-    # Ensure directory exists (useful for local testing)
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -36,7 +33,6 @@ def save_snapshot(username, following, followers, verified):
 def get_last_snapshot(username):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    # Offset 1 skips the current snapshot we just saved to find the previous one
     c.execute("SELECT following, followers, verified FROM stats_history WHERE username=? ORDER BY timestamp DESC LIMIT 1 OFFSET 1", (username,))
     row = c.fetchone()
     conn.close()
@@ -44,6 +40,7 @@ def get_last_snapshot(username):
 
 # --- UTILS ---
 def escape_md(text):
+    """Deep escape for MarkdownV2 to prevent parsing errors."""
     return re.sub(r'([_*\[\]()~`>#+\-=|{}.!])', r'\\\1', str(text))
 
 def get_menu_keyboard():
@@ -105,20 +102,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             res_data = response.json()
             metrics = res_data.get('public_metrics', {})
 
-            # Fetch Current Numbers
             f_cur = metrics.get('friends_count') or res_data.get('friends_count') or 0
             fl_cur = metrics.get('followers_count') or res_data.get('followers_count') or 0
             v_cur = metrics.get('verified_followers_count') or res_data.get('blue_verified_followers_count') or 0
             
-            # Clean Booleans/None
             f_cur = 0 if isinstance(f_cur, bool) else int(f_cur)
             fl_cur = 0 if isinstance(fl_cur, bool) else int(fl_cur)
             v_cur = 0 if isinstance(v_cur, bool) else int(v_cur)
 
-            # 💾 Save Current Snapshot
             save_snapshot(user_raw, f_cur, fl_cur, v_cur)
-            
-            # 🕒 Get Previous Snapshot
             prev = get_last_snapshot(user_raw)
             
             def format_diff(cur, old):
@@ -131,14 +123,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             fl_diff = format_diff(fl_cur, prev[1]) if prev else ""
             v_diff = format_diff(v_cur, prev[2]) if prev else ""
 
+            # Ensure the date and separator use escaped characters
+            date_str = escape_md(datetime.now().strftime('%Y-%m-%d %H:%M'))
+            sep = escape_md("───────────────")
+
             report = (
                 f"👤 *Profile:* @{user_esc}\n"
-                f"📅 *Last Update:* {escape_md(datetime.now().strftime('%Y\-%m\-%d %H:%M'))}\n"
-                f"───────────────\n"
-                f"📈 *Following:* `{f_cur}`{f_diff}\n"
-                f"👥 *Followers:* `{fl_cur}`{fl_diff}\n"
-                f"💎 *Verified:* `{v_cur}`{v_diff}\n"
-                f"───────────────\n"
+                f"📅 *Last Update:* {date_str}\n"
+                f"{sep}\n"
+                f"📈 *Following:* `{escape_md(f_cur)}`{f_diff}\n"
+                f"👥 *Followers:* `{escape_md(fl_cur)}`{fl_diff}\n"
+                f"💎 *Verified:* `{escape_md(v_cur)}`{v_diff}\n"
+                f"{sep}\n"
                 f"ℹ️ _Growth tracking active since first check\._"
             )
             
@@ -149,9 +145,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(f"❌ Error: {escape_md(str(e))}", parse_mode='MarkdownV2')
 
 if __name__ == '__main__':
-    # Initialise Database
     init_db()
-    
     if not TG_TOKEN or not SOCIALDATA_API:
         print("CRITICAL: Environment Variables missing!")
     else:
